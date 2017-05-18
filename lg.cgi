@@ -1,55 +1,17 @@
 #!/usr/bin/perl
 #
-#    Looking Glass CGI with ssh, telnet, rexec and remote LG support
-#                    with IPv4 and IPv6 support
-#
-#    Copyright (C) 2000-2014 Cougar <cougar@random.ee>
-#                                   http://www.version6.net/
-#
-#    This program is free software; you can redistribute it and/or modify
-#    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation; either version 2 of the License, or
-#    (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program; if not, write to the Free Software
-#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-#
 
 use strict qw(subs vars);
 
 my $configfile = "lg.conf";
-$ENV{HOME} = ".";	# SSH needs access for $HOME/.ssh
 
 use XML::Parser;
 
-my $SYS_progid = '$Id: lg.cgi,v 1.30 2004/11/25 14:12:42 cougar Exp $';
-
 my $default_ostype = "ios";
 
-my $lgurl;
-my $logfile;
-my $asfile;
-my $logoimage;
-my $logoalign;
-my $logolink;
-my $title;
-my $favicon;
-my $email;
-my $rshcmd;
-my $ipv4enabled;
-my $ipv6enabled;
-my $httpmethod = "POST";
+my $httpmethod = "GET";
 my $timeout;
-my $disclaimer;
 my $securemode = 1;
-my $ssh2key;
-my $ssh2pubkey;
 
 my %router_list;
 my @routers;
@@ -123,8 +85,6 @@ my %whois = (
 
 $| = 1;
 
-&read_config;
-
 # grab CGI data
 my $incoming;
 if ($ENV{'REQUEST_METHOD'} eq "POST") {
@@ -135,14 +95,6 @@ if ($ENV{'REQUEST_METHOD'} eq "POST") {
 my %FORM = &cgi_decode($incoming);
 
 my $date = localtime;
-if ($logfile ne "") {
-	open(LOG, ">>$logfile");
-	($ENV{REMOTE_HOST}) && ( print LOG "$ENV{'REMOTE_HOST'} ");
-	($ENV{REMOTE_ADDR}) && ( print LOG "$ENV{'REMOTE_ADDR'} ");
-	print LOG "- - [$date]";
-	($ENV{HTTP_REFERER}) && ( print LOG " $ENV{'HTTP_REFERER'}");
-}
-
 my $query_cmd = "";
 
 if (defined $valid_query{$ostypes{$FORM{router}}}{"ipv46"}{$FORM{query}}) {
@@ -150,25 +102,13 @@ if (defined $valid_query{$ostypes{$FORM{router}}}{"ipv46"}{$FORM{query}}) {
 } elsif (defined $valid_query{$ostypes{$FORM{router}}}{lc($FORM{protocol})}{$FORM{query}}) {
 	$query_cmd = $valid_query{$ostypes{$FORM{router}}}{lc($FORM{protocol})}{$FORM{query}};
 } elsif (($FORM{router} ne "") || ($FORM{protocol} ne "") || ($FORM{query})) {
-	if ($logfile ne "") {
-		print LOG " \"$FORM{router}\" \"ILLEGAL QUERY: [$ostypes{$FORM{router}}] [$FORM{protocol}] [$FORM{query}]\"\n";
-		close(LOG);
-	}
 	&print_head;
-	&print_form;
-	&print_tail;
 	exit;
 }
 
 if ((! defined $router_list{$FORM{router}}) ||
     ($query_cmd eq "")) {
-	if ($logfile ne "") {
-		print LOG "\n";
-		close(LOG);
-	}
 	&print_head;
-	&print_form;
-	&print_tail;
 	exit;
 }
 
@@ -176,10 +116,6 @@ $FORM{addr} =~ s/\s.*// if (($FORM{query} eq "ping") || ($FORM{query} eq "trace"
 $FORM{addr} =~ s/[^\s\d\.:\w\-_\/\$]//g;
 
 if ($router_list{$FORM{router}} =~ /^http[s]{0,1}:/) {
-	if ($logfile ne "") {
-		print LOG " \"$FORM{router}\" \"$FORM{query}" . ($FORM{addr} ne "" ? " $FORM{addr}" : "") . "\"\n";
-		close LOG;
-	}
 	if ($router_list{$FORM{router}} =~ /\?/) {
 		$incoming = "&$incoming";
 	} else {
@@ -236,15 +172,6 @@ if ($query_cmd =~ /%s/) {
 	&print_warning("No parameter needed") if ($FORM{addr} ne "");
 }
 
-my %AS;
-if ($asfile =~ /\.db$/) {
-	use DB_File;
-	tie (%AS, 'DB_File', $asfile, O_RDONLY, 0644, $DB_HASH) or
-		print STDERR "Can\'t read AS database $asfile: $!\n";
-} else {
-	%AS = &read_as_list($asfile);
-}
-
 my $table;
 $table = "table inet.0" if ($FORM{protocol} eq "IPv4");
 $table = "table inet6.0" if ($FORM{protocol} eq "IPv6");
@@ -292,352 +219,22 @@ if ($ostypes{$FORM{router}} eq "junos") {
 
 &run_command($FORM{router}, $router_list{$FORM{router}}, $command);
 
-&print_tail;
 exit;
-
-sub read_config {
-	my $xp = new XML::Parser(ProtocolEncoding => "ISO-8859-1", Handlers => {Char => \&xml_charparse, Start => \&xml_startparse, End => \&xml_endparse});
-	$xp->parsefile($configfile);
-	undef($xp);
-}
-
-sub xml_charparse {
-	my ($xp,$str) = @_;
-	return if $str =~ /^\s*$/m;
-	my $elem = lc($xp->current_element);
-	if ($xml_current_router_name ne "") {
-		if ($elem eq "url") {
-			$router_list{$xml_current_router_name} = $str;
-			push @routers, $xml_current_router_name;
-		} elsif ($elem eq "title") {
-			$namemap{$xml_current_router_name} .= $str;
-		} else {
-			die("Illegal value for configuration tag \"" . $xp->current_element . "\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif (($xml_current_cgi_name ne "") && ($xml_current_replace_name ne "")) {
-		if (($elem eq "replace") ||
-		    ($elem eq "default")) {
-			$cmdmap{$xml_current_cgi_name}{"ipv4"}{$xml_current_replace_name} .= $str if ($xml_current_replace_proto ne "ipv6");
-			$cmdmap{$xml_current_cgi_name}{"ipv6"}{$xml_current_replace_name} .= $str if ($xml_current_replace_proto ne "ipv4");
-		} else {
-			die("Illegal value for configuration tag \"" . $xp->current_element . "\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "lgurl") {
-		$lgurl = $str;
-	} elsif ($elem eq "logfile") {
-		$logfile = $str;
-	} elsif ($elem eq "aslist") {
-		$asfile = $str;
-	} elsif ($elem eq "logoimage") {
-		$logoimage = $str;
-	} elsif ($elem eq "htmltitle") {
-		$title = $str;
-	} elsif ($elem eq "favicon") {
-		$favicon = $str;
-	} elsif ($elem eq "contactmail") {
-		$email = $str;
-	} elsif ($elem eq "rshcmd") {
-		$rshcmd = $str;
-	} elsif ($elem eq "httpmethod") {
-		$httpmethod = $str;
-	} elsif ($elem eq "timeout") {
-		$timeout = $str;
-	} elsif ($elem eq "disclaimer") {
-		$disclaimer = "<CENTER><TABLE WIDTH=\"85%\"><TR><TD><FONT SIZE=-3>Disclaimer: $str</FONT></TD></TR></TABLE></CENTER>\n";
-	} elsif ($elem eq "securemode") {
-		if ($str =~ /^(0|off|no)$/i) {
-			$securemode = 0;
-		} elsif ($str =~ /^(1|on|yes)$/i) {
-			$securemode = 1;
-		} else {
-			die("Illegal securemode \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "separator") {
-		push @routers, "---- $str ----";
-	} elsif ($elem eq "ssh2key") {
-		$ssh2key = $str;
-	} elsif ($elem eq "ssh2pubkey") {
-		$ssh2pubkey = $str;
-	} else {
-		print "<!--    C [$xml_current_router_name] [" . $xp->current_element . "] [$str] -->\n";
-	}
-}
-
-sub xml_startparse {
-	my ($xp,$str,@attrval) = @_;
-	my $elem = lc($xp->current_element);
-	my $str2 = lc($str);
-	if ($elem eq "") {
-		if ($str2 ne "lg_conf_file") {
-			die("Illegal configuration tag \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "lg_conf_file") {
-		if ($str2 eq "logoimage") {
-			for (my $i = 0; $i <= $#attrval; $i += 2) {
-				if (lc($attrval[$i]) eq "align") {
-					$logoalign = " Align=\"" . $attrval[$i+1] . "\"";
-				} elsif (lc($attrval[$i]) eq "link") {
-					$logolink = $attrval[$i+1];
-				} else {
-					die("Illegal parameter for LogoImage \"" . $attrval[$i] . "\" at line " . $xp->current_line . ", column " . $xp->current_column);
-				}
-			}
-		} elsif (($str2 ne "lgurl") &&
-		    ($str2 ne "logfile") &&
-		    ($str2 ne "aslist") &&
-		    ($str2 ne "htmltitle") &&
-		    ($str2 ne "favicon") &&
-		    ($str2 ne "contactmail") &&
-		    ($str2 ne "rshcmd") &&
-		    ($str2 ne "httpmethod") &&
-		    ($str2 ne "timeout") &&
-		    ($str2 ne "disclaimer") &&
-		    ($str2 ne "securemode") &&
-		    ($str2 ne "ssh2key") &&
-		    ($str2 ne "ssh2pubkey") &&
-		    ($str2 ne "router_list") &&
-		    ($str2 ne "argument_list")) {
-			die("Illegal configuration tag \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "router_list") {
-		if ($str2 eq "router") {
-			for (my $i = 0; $i <= $#attrval; $i += 2) {
-				if (lc($attrval[$i]) eq "name") {
-					$xml_current_router_name = $attrval[$i+1];
-					$ostypes{$xml_current_router_name} = lc($default_ostype);
-					$ipv4enabled ++;
-				} elsif (lc($attrval[$i]) eq "default") {
-					if (lc($attrval[$i+1]) eq "yes") {
-						$default_router = $xml_current_router_name;
-					}
-				} elsif (lc($attrval[$i]) eq "enableipv6") {
-					if (lc($attrval[$i+1]) eq "yes") {
-						$ipv4enabled--;
-						$ipv6enabled++;
-					}
-				} elsif (lc($attrval[$i]) eq "ostype") {
-					$ostypes{$xml_current_router_name} = lc($attrval[$i+1]);
-				} elsif (lc($attrval[$i]) eq "logical-system") {
-					$logicalsystem{$xml_current_router_name} = lc($attrval[$i+1]);
-				}
-			}
-			if ($xml_current_router_name eq "") {
-				die("Variable \"Name\" missing at line " . $xp->current_line . ", column " . $xp->current_column);
-			}
-		} elsif ($str2 eq "separator") {
-		} else {
-			die("Illegal configuration tag \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "router") {
-		if (($str2 ne "title") &&
-		    ($str2 ne "url")) {
-			die("Illegal configuration tag \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "argument_list") {
-		if ($str2 eq "lg") {
-			for (my $i = 0; $i <= $#attrval; $i += 2) {
-				if (lc($attrval[$i]) eq "url") {
-					$xml_current_cgi_name = $attrval[$i+1];
-				}
-			}
-			if ($xml_current_cgi_name eq "") {
-				die("Variable \"URL\" missing at line " . $xp->current_line . ", column " . $xp->current_column);
-			}
-		} else {
-			die("Illegal configuration tag \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} elsif ($elem eq "lg") {
-		if ($str2 eq "replace") {
-			for (my $i = 0; $i <= $#attrval; $i += 2) {
-				if (lc($attrval[$i]) eq "param") {
-					$xml_current_replace_name = $attrval[$i+1];
-				} elsif (lc($attrval[$i]) eq "proto") {
-					$xml_current_replace_proto = lc($attrval[$i+1]);
-				}
-			}
-			if ($xml_current_replace_name eq "") {
-				die("Variable \"Param\" missing at line " . $xp->current_line . ", column " . $xp->current_column);
-			}
-			$cmdmap{$xml_current_cgi_name}{"ipv4"}{$xml_current_replace_name} = "" if ($xml_current_replace_proto ne "ipv6");
-			$cmdmap{$xml_current_cgi_name}{"ipv6"}{$xml_current_replace_name} = "" if ($xml_current_replace_proto ne "ipv4");
-		} elsif ($str2 eq "default") {
-			$xml_current_replace_name = "DEFAULT";
-		} else {
-			die("Illegal configuration tag \"$str\" at line " . $xp->current_line . ", column " . $xp->current_column);
-		}
-	} else {
-		die("ASSERT str=\"$str\" elem=\"" . $xp->current_element . "\" at line " . $xp->current_line . ", column " . $xp->current_column);
-
-	}
-}
-
-sub xml_endparse {
-	my ($xp,$str) = @_;
-	my $elem = lc($xp->current_element);
-	my $str2 = lc($str);
-
-	if ($elem eq "router_list") {
-		if ($str2 eq "router") {
-			$xml_current_router_name = "";
-		}
-	} elsif ($elem eq "lg") {
-		if (($str2 eq "replace") ||
-		    ($str2 eq "default")) {
-			$xml_current_replace_name = "";
-			$xml_current_replace_proto = "";
-		}
-	}
-}
 
 sub print_head {
 	my ($arg) = @_;
-	my ($titlestr) = $title;
-	$titlestr .= " - $arg" if ($arg ne "");
 	print "Content-type: text/html; charset=utf-8\n\n";
-	print "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\">\n";
-	print "<!--\n\t$SYS_progid\n\thttp://freshmeat.net/projects/lg/\n-->\n";
-	print "<HTML>\n";
-	print "<HEAD>\n";
-	print "<TITLE>$titlestr</TITLE>\n";
-	if ($favicon ne "") {
-		print "<LINK REL=\"shortcut icon\" HREF=\"${favicon}\">\n";
-	}
-	print "<meta name=description content=\"$titlestr\"\>\n";
-	print "<meta name=keywords content=\"Looking glass, LG, BGP, prefix-list, AS-path, ASN, traceroute, ping, IPv6, Cisco, Juniper, Zebra, Quagga, internet\"/>\n";
-	print "<style>em { font-style: normal; background: #ffff00; color: #000000; }</style>\n";
-	print "</HEAD>\n";
-	print "<BODY BGCOLOR=\"#FFFFFF\" TEXT=\"#000000\">\n";
-	if ($logoimage ne "") {
-		print "<TABLE BORDER=\"0\" WIDTH=\"100%\"><TR><TD$logoalign>";
-		print "<A HREF=\"$logolink\">" if ($logolink ne "");
-		print "<IMG SRC=\"$logoimage\" BORDER=\"0\" ALT=\"LG\">";
-		print "</A>" if ($logolink ne "");
-		print "</TD></TR></TABLE>\n";
-	}
-	print "<CENTER>\n";
-	print "<H2>$titlestr</H2>\n";
-	print "</CENTER>\n";
-	print "<P>\n";
-	print "<HR SIZE=2 WIDTH=\"85%\" NOSHADE>\n";
-	print "<P>\n";
-}
-
-sub print_form {
-	if ($httpmethod eq "GET") {
-		print "<FORM ACTION=\"$lgurl\">\n";
-	} else {
-		print "<FORM METHOD=$httpmethod ACTION=\"$lgurl\">\n";
-	}
-	print <<EOT;
-<CENTER>
-<TABLE BORDER=0 BGCOLOR="#EFEFEF"><TR><TD>
-<TABLE BORDER=0 CELLPADDING=2 CELLSPACING=2>
-<TR>
-<TH BGCOLOR="#000000" NOWRAP><FONT COLOR="#FFFFFF">Type of Query</FONT></TH>
-<TH BGCOLOR="#000000" NOWRAP><FONT COLOR="#FFFFFF">Additional parameters</FONT></th>
-<TH BGCOLOR="#000000" NOWRAP><FONT COLOR="#FFFFFF">Node</FONT></TH></TR>
-<TR><TD>
-<TABLE BORDER=0 CELLPADDING=2 CELLSPACING=2>
-<TR><TD><INPUT TYPE=radio NAME=query VALUE=bgp></TD><TD>&nbsp;bgp</TD></TR>
-<TR><TD><INPUT TYPE=radio NAME=query VALUE=advertised-routes></TD><TD>&nbsp;bgp&nbsp;advertised-routes</TD></TR>
-<TR><TD><INPUT TYPE=radio NAME=query VALUE=summary></TD><TD>&nbsp;bgp&nbsp;summary</TD></TR>
-<TR><TD><INPUT TYPE=radio NAME=query VALUE=ping></TD><TD>&nbsp;ping</TD></TR>
-<TR><TD><INPUT TYPE=radio NAME=query VALUE=trace CHECKED></TD><TD>&nbsp;trace</TD></TR>
-EOT
-	if ($ipv4enabled && $ipv6enabled) {
-		print <<EOT;
-<TR><TD></TD><TD><SELECT NAME=protocol>
-<OPTION VALUE=IPv4> IPv4
-<OPTION VALUE=IPv6> IPv6
-</SELECT></TD></TR>
-</TABLE>
-EOT
-	} elsif ($ipv4enabled) {
-		print "</TABLE>\n<INPUT TYPE=hidden NAME=protocol VALUE=IPv4>\n";
-	} elsif ($ipv6enabled) {
-		print "</TABLE>\n<INPUT TYPE=hidden NAME=protocol VALUE=IPv6>\n";
-	}
-	print <<EOT;
-</TD>
-<TD ALIGN=CENTER>&nbsp;<BR><INPUT NAME=addr SIZE=30><BR><FONT SIZE=-1>&nbsp;<SUP>&nbsp;</SUP>&nbsp;</FONT></TD>
-<TD ALIGN=RIGHT>&nbsp;<BR><SELECT NAME=router>
-EOT
-	my $remotelg = 0;
-	my $optgroup = 0;
-	for (my $i = 0; $i <= $#routers; $i++) {
-		my $router = $routers[$i];
-		if ($router =~ /^---- (.*) ----$/) {
-			$router = $1;
-			print "</OPTGROUP>\n" if ($optgroup);
-			print "<OPTGROUP LABEL=\"" . html_encode($router) . "\">\n";
-			$optgroup = 1;
-			next;
-		}
-		my $descr = "";
-		my $default = "";
-		if ($FORM{router} ne "") {
-			if ($router eq $FORM{router}) {
-				$default = " selected";
-			}
-		} elsif ($router eq $default_router) {
-			$default = " SELECTED";
-		}
-		if (defined $namemap{$router}) {
-			$descr = $namemap{$router};
-		} else {
-			$descr = $router;
-		}
-		if ($router_list{$router} =~ /^http/) {
-			$descr .= " *";
-			$remotelg++;
-		}
-		print "<OPTION VALUE=\"". html_encode($router) . "\"$default> " . html_encode($descr) . "\n";
-	}
-	print "</OPTGROUP>\n" if ($optgroup);
-	if ($remotelg) {
-		$remotelg = "<SUP>*</SUP>&nbsp;remote&nbsp;LG&nbsp;script";
-	} else {
-		$remotelg = "<SUP>&nbsp;</SUP>&nbsp;";
-	}
-print <<EOT;
-</SELECT><BR><FONT SIZE=-1>&nbsp;&nbsp;$remotelg</FONT></TD>
-</TR>
-<TR><TD ALIGN=CENTER COLSPAN=3>
-<P>
-<INPUT TYPE=SUBMIT VALUE=Submit> | <INPUT TYPE=RESET VALUE=Reset>
-<P>
-</TD></TR>
-</TABLE>
-</TD></TR></TABLE>
-</CENTER>
-<P>
-</FORM>
-EOT
-}
-
-sub print_tail {
-	print <<EOT;
-<HR SIZE=2 WIDTH="85%" NOSHADE>
-</BODY>
-</HTML>
-EOT
 }
 
 sub print_error
 {
-	print "<CENTER><FONT SIZE=+2 COLOR=\"#ff0000\">" . join(" ", @_) . "</FONT></CENTER>\n";
-	&print_tail;
+	print join(" ", @_) . "\n";
 	exit 1;
 }
 
 sub print_warning
 {
-	print "<CENTER><FONT SIZE=+2 COLOR=\"#0000ff\">WARNING! " . join(" ", @_) . "</FONT></CENTER>\n";
-	print <<EOT;
-<P>
-<HR SIZE=2 WIDTH="85%" NOSHADE>
-<P>
-EOT
+	print join(" ", @_) . "\n";
 }
 
 my $regexp = 0;
@@ -1011,152 +608,6 @@ sub cgi_decode {
 		$FORM{$name} .= $value;
 	}
 	return (%FORM);
-}
-
-sub read_as_list {
-	my ($fn) = @_;
-
-	local *F;
-	my %AS;
-
-	if (! open(F, $fn)) {
-		print "<!-- Can't read AS list from $fn: $! -->\n";
-		return;
-	}
-	while (<F>) {
-		chop;
-		if (/^#include\s+(.+)$/) {
-			my %AS2 = &read_as_list($1);
-			foreach my $key (keys (%AS2)) {
-				$AS{$key} = $AS2{$key};
-			}
-			undef %AS2;
-			next;
-		}
-		next if (/^$/ || /^\s*#/);
-		my ($asnum, $descr) = split /\t+/;
-		$asnum =~ s/^[^\d]*(\d+)[^\d]*$/$1/;
-		$AS{$asnum} = $descr;
-	}
-	close(F);
-	return (%AS);
-}
-
-sub as2link {
-	my ($line, $regexp) = @_;
-
-	my $prefix;
-	my $suffix;
-	if ($line =~ /^([^\d]*)((\d)|(\d[\d\s\[\]\{\}]*\d))([^\d]*)$/) {
-		$prefix = $1;
-		$line = $4;
-		$suffix = $5;
-	}
-	return($prefix . $line . $suffix) if ($line =~ /^\s*$/);
-	if ($line =~ /:/) {
-		return($prefix . $line . $suffix);
-	}
-	my @aslist = split(/[^\d]+/, $line);
-	my @separators = split(/[\d]+/, $line);
-	my @regexplist = split(/[_^$ ]+/, $regexp);
-	$line = "";
-	for (my $i = 0; $i <= $#aslist; $i++) {
-		my $as = $aslist[$i];
-		my $sep = "";
-		$sep = $separators[$i + 1] if ($i <= $#separators);
-		my $astxt = $as;
-		for (my $j = 0; $j <= $#regexplist; $j++) {
-			if ($regexplist[$j] eq $as) {
-				$astxt = "<EM>$as</EM>";
-				last;
-			}
-		}
-		my $rep;
-		if (! defined $AS{$as}) {
-			$rep = $astxt;
-		} else {
-			my $link = "";
-			if ($AS{$as} =~ /(\w+):/) {
-				if (defined $whois{$1}) {
-					$link = sprintf(" HREF=\"$whois{$1}\" TARGET=_lookup", $as);
-				} elsif (defined $whois{default}) {
-					$link = sprintf(" HREF=\"$whois{default}\" TARGET=_lookup", $as);
-				}
-			}
-			my $descr = $AS{$as};
-			$descr = "$2 ($1)" if ($descr =~ /^([^:]+):(.*)$/);
-			$rep = "<A title=\"" . html_encode($descr) . "\"${link}>$astxt</A>";
-		}
-		$line .= $rep . $sep;
-	}
-	$suffix =~ s/(aggregated by )(\d+)( )/($1 . as2link($2) . $3)/e;
-	return($prefix . $line . $suffix);
-}
-
-sub community2link {
-	my ($line) = @_;
-
-	my $prefix;
-	my $suffix;
-	my @communitylist = split(/[^\d:]+/, $line);
-	my @separators = split(/[\d:]+/, $line);
-	$line = "";
-	for (my $i = 0; $i <= $#communitylist; $i++) {
-		my $community = $communitylist[$i];
-		my $sep = "";
-		$sep = $separators[$i + 1] if ($i <= $#separators);
-		my $rep;
-		if (! defined $AS{$community}) {
-			$rep = $community;
-		} else {
-			my $link = "";
-			my $descr = $AS{$community};
-			my $asnum = $1 if ($community =~ /^(\d+):/);
-			if (defined $AS{$asnum . ":URL"}) {
-				$rep = "<A HREF=\"" . $AS{$asnum . ":URL"} . "\" TARGET=_lookup>$community</A> (" . html_encode($descr) . ")";
-			} else {
-				$rep = html_encode("$community ($descr)");
-			}
-		}
-		$line .= $rep . $sep;
-	}
-	return($line);
-}
-
-sub bgplink {
-	my ($txt, $cmd) = @_;
-
-	my $link = $lgurl;
-	my $router = $FORM{router};
-
-	$router =~ s/\+/%2B/;
-	$router =~ s/=/%3D/;
-	$router =~ s/\&/%26/g;
-
-	$link .= "?query=bgp";
-	$link .= "&amp;protocol=" . $FORM{protocol};
-	$link .= "&amp;addr=$cmd";
-	$link .= "&amp;router=$router";
-	$link =~ s/ /+/g;
-	return("<A HREF=\"$link\">$txt</A>");
-}
-
-sub pinglink {
-	my ($ip) = @_;
-
-	my $link = $lgurl;
-	my $router = $FORM{router};
-
-	$router =~ s/\+/%2B/;
-	$router =~ s/=/%3D/;
-	$router =~ s/\&/%26/g;
-
-	$link .= "?query=ping";
-	$link .= "&amp;protocol=" . $FORM{protocol};
-	$link .= "&amp;addr=$ip";
-	$link .= "&amp;router=$router";
-	$link =~ s/ /+/g;
-	return("<A HREF=\"$link\"><B>$ip</B></A>");
 }
 
 sub html_encode {

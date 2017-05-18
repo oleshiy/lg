@@ -617,14 +617,7 @@ EOT
 
 sub print_tail {
 	print <<EOT;
-<P>
 <HR SIZE=2 WIDTH="85%" NOSHADE>
-$disclaimer
-<P>
-<CENTER>
-<I>Please email questions or comments to <A HREF="mailto:$email">$email</A>.</I>
-<P>
-</CENTER>
 </BODY>
 </HTML>
 EOT
@@ -691,57 +684,7 @@ sub run_command
 		$regexp = $1;
 	}
 
-	if ($scheme eq "rsh") {
-		print_error("Configuration error, missing rshcmd") if ($rshcmd eq "");
-		open(P, "$rshcmd $host \'$command\' |");
-		while (<P>) {
-			showlines($_);
-		}
-		close(P);
-	} elsif ($scheme eq "ssh") {
-		eval "
-			use IO::Handle;
-			use Net::SSH::Perl;
-			use Net::SSH::Perl::Cipher;
-		";
-		die $@ if $@;
-		my $remotecmd = "$command; quit";
-		$remotecmd = "set cli logical-system $logicalsystem{$FORM{router}}; " . $command if (defined $logicalsystem{$FORM{router}});
-		$port = 22 if ($port eq "");
-		my $ssh = Net::SSH::Perl->new($host, port => $port);
-		if ($] > 5.007) {
-			require Encode;
-			$login = Encode::encode_utf8($login);
-			$password = Encode::encode_utf8($password);
-			$remotecmd = Encode::encode_utf8($remotecmd);
-		}
-		$ssh->login($login, $password);
-		$ssh->register_handler('stdout', sub { showlines($_[1]->bytes); });
-		$ssh->register_handler('stderr', sub { showlines($_[1]->bytes); });
-		$ssh->cmd("$remotecmd");
-	} elsif ($scheme eq "ssh2") {
-		eval "
-			use Net::SSH2;
-		";
-		die $@ if $@;
-		my $remotecmd = "$command; quit";
-		$remotecmd = "set cli logical-system $logicalsystem{$FORM{router}}; " . $command if (defined $logicalsystem{$FORM{router}});
-		$port = 22 if ($port eq "");
-		$ssh2 = Net::SSH2->new();
-		$ssh2->connect($host, $port) or die $!;
-		if ($password) {
-			$ssh2->auth_password($login, $password);
-		} else {
-			$ssh2->auth_publickey($login, $ssh2pubkey, $ssh2key);
-		}
-		my $chan = $ssh2->channel();
-		$chan->blocking(1);
-		$chan->exec("$remotecmd");
-		while ($chan->read($_, 1024)) {
-			showlines($_);
-		};
-		$chan->close;
-	} elsif ($scheme eq "telnet") {
+	if ($scheme eq "telnet") {
 		my @output;
 		eval "
 			use Net::Telnet;
